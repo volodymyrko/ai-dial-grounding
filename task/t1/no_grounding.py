@@ -59,6 +59,9 @@ class TokenTracker:
 #    hint: api_version set as empty string if you gen an error that indicated that api_version cannot be None
 # 2. Create TokenTracker
 
+token_tracer = TokenTracker()
+llm = AzureChatOpenAI(azure_deployment='gpt-4o',  azure_endpoint=DIAL_URL, api_key=SecretStr(API_KEY), api_version='')
+
 def join_context(context: list[dict[str, Any]]) -> str:
     #TODO:
     # You cannot pass raw JSON with user data to LLM (" sign), collect it in just simple string or markdown.
@@ -67,7 +70,22 @@ def join_context(context: list[dict[str, Any]]) -> str:
     #   name: John
     #   surname: Doe
     #   ...
-    raise NotImplementedError
+    # raise NotImplementedError
+    lines = []
+
+    for entry in context:
+        # Assuming each dictionary represents a "User" block as per your example
+        lines.append("User:")
+
+        for key, value in entry.items():
+            # Stripping quotes from values if they are strings to avoid raw JSON format
+            clean_value = str(value).replace('"', '')
+            lines.append(f"   {key}: {clean_value}")
+
+        # Adding an empty line between users for better readability
+        lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 async def generate_response(system_prompt: str, user_message: str) -> str:
@@ -80,16 +98,54 @@ async def generate_response(system_prompt: str, user_message: str) -> str:
     # 4. Add tokens to `token_tracker`
     # 5. Print response content and `total_tokens`
     # 5. return response content
-    raise NotImplementedError
+    # raise NotImplementedError
 
+    messages = [
+        ('system', system_prompt),
+        ('human', user_message),
+    ]
+    response = await llm.ainvoke(messages)
+
+    total_tokens = response.response_metadata['token_usage']['total_tokens']
+    token_tracer.add_tokens(total_tokens)
+
+    print(f'total_tokens: {total_tokens}')
+    print(f'response: {response.content}')
+
+    return response.content
 
 async def main():
     print("Query samples:")
     print(" - Do we have someone with name John that loves traveling?")
 
+    user_batch_limit = 100
+
     user_question = input("> ").strip()
+
     if user_question:
         print("\n--- Searching user database ---")
+
+        all_users = UserClient().get_all_users()
+        user_batches = [all_users[i:i + user_batch_limit] for i in range(0, len(all_users), user_batch_limit)]
+
+        tasks = []
+        for batch in user_batches:
+            tasks.append(
+                generate_response(
+                    BATCH_SYSTEM_PROMPT,
+                    USER_PROMPT.format(context=join_context(batch), query=user_question)
+                )
+            )
+
+        if results := [x for x in await asyncio.gather(*tasks) if x != 'NO_MATCHES_FOUND']:
+            results = '\n\n'.join(results)
+
+            ai_response = await generate_response(FINAL_SYSTEM_PROMPT, USER_PROMPT.format(context=results, query=user_question))
+            print('final result:\n', ai_response)
+        else:
+            print('No users found matching')
+
+        print(f'\ntokens summary: {token_tracer.get_summary()}')
 
         #TODO:
         # 1. Get all users (use UserClient)
@@ -108,7 +164,7 @@ async def main():
         #           - User prompt: you need to make augmentation of retrieved result and user question
         # 6. Otherwise prin the info that `No users found matching`
         # 7. In the end print info about usage, you will be impressed of how many tokens you have used. (imagine if we have 10k or 100k users 😅)
-    raise NotImplementedError
+        # raise NotImplementedError
 
 
 if __name__ == "__main__":
